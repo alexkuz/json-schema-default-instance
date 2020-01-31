@@ -321,6 +321,63 @@ const defaultAddress = {
   state: 'NY',
 };
 
+const cycleSchema = {
+  $id: 'cycleSchema.json',
+  definitions: {
+    allOfCycle: {
+      allOf: [{
+        $ref: '#/definitions/allOfCycle'
+      }]
+    },
+    objectCycle: {
+      type: 'object',
+      properties: {
+        prop: {
+          $ref: '#/definitions/objectCycle'  
+        }
+      },
+      required: ['prop']
+    },
+    oneOfCycle: {
+      oneOf: [{
+        $ref: '#/definitions/oneOfCycle'  
+      }, {
+        type: 'null'
+      }]
+    },
+    notACycle: {
+      $ref: '#/definitions/notACycleChild'
+    },
+    notACycleChild: {
+      $ref: 'notACycleSchema1.json#/definitions/inner'
+    }
+  }
+};
+
+const notACycleSchema1 = {
+  $id: 'notACycleSchema1.json',
+  definitions: {
+    inner: {
+      $ref: '#/definitions/notACycleChild'
+    },
+    notACycleChild: {
+      $ref: 'notACycleSchema2.json#/definitions/inner'
+    }
+  }
+};
+
+const notACycleSchema2 = {
+  $id: 'notACycleSchema2.json',
+  definitions: {
+    inner: {
+      $ref: '#/definitions/notACycleChild'
+    },
+    notACycleChild: {
+      enum: ['not a cycle']
+    }
+  }
+}
+
 ajv.addSchema([
   definitionSchema,
   oneOfDefSchema,
@@ -333,7 +390,10 @@ ajv.addSchema([
   externalSchema,
   resolveRefSchema,
   invalidResolveRefSchema,
-  literalValueSchema
+  literalValueSchema,
+  cycleSchema,
+  notACycleSchema1,
+  notACycleSchema2
 ]);
 
 const ins = instantiate({ ajv });
@@ -562,4 +622,31 @@ test('Array items resolve correctly', t => {
   });
 
   t.deepEqual(ins('array-items.json').result, ['', 0, true] as any);
+});
+
+test('Should return error for allOf schema with cycle dependency', t => {
+  const { result, hasResult, error } = ins('cycleSchema.json#/definitions/allOfCycle');
+
+  t.is(hasResult, false);
+  t.regex(error, /Cycle dependency/);
+});
+
+test('Should return error for oneOf schema with cycle dependency', t => {
+  const { result, hasResult, error } = ins('cycleSchema.json#/definitions/oneOfCycle');
+
+  t.is(hasResult, false);
+  t.regex(error, /Cycle dependency/);
+});
+
+test('Should return error for object schema with cycle dependency', t => {
+  const { result, hasResult, error } = ins('cycleSchema.json#/definitions/objectCycle');
+
+  t.is(hasResult, false);
+  t.regex(error, /Cycle dependency/);
+});
+
+test('Instantiate value for schemas with similar paths', t => {
+  const { result } = ins('cycleSchema.json#/definitions/notACycle');
+
+  t.is(result, 'not a cycle');
 });

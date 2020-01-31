@@ -56,11 +56,19 @@ function defaultLiteralValue(type: string): any {
 function resolveRef(
   id: string,
   schema: object,
-  options: Options
+  options: Options,
+  parentRefs: string[]
 ): InstantiateResult {
   const withoutRef = omit(schema, '$ref');
 
   const { schemaId = id, path } = parseRef(schema['$ref']);
+
+  const schemaRef = buildRef(schemaId, schema, path);
+  if(parentRefs.indexOf(schemaRef) !== -1) {
+    const message = 'Cycle dependency found in ' + schemaRef;
+    return { hasResult: false, error: message }
+  }
+
   const validateFunction = options.ajv.getSchema(schemaId);
 
   if (!validateFunction) {
@@ -78,22 +86,22 @@ function resolveRef(
     : validateFunction.schema;
   const result = merge({}, resolved, withoutRef);
 
-  return recursiveInstantiate(schemaId, result, options);
+  return recursiveInstantiate(schemaId, result, options, [...parentRefs, schemaRef]);
 }
 
-function maybeResolveRefs(id: string, def: any, options: Options): any {
+function maybeResolveRefs(id: string, def: any, options: Options, parentRefs: string[]): any {
   if (!options.resolveDefaultRefs || !isObject(def)) {
     return def;
   }
 
   if (Array.isArray(def)) {
-    return def.map(val => maybeResolveRefs(id, val, options));
+    return def.map(val => maybeResolveRefs(id, val, options, parentRefs));
   }
 
   let result = {};
 
   if (has(def, '$ref')) {
-    const { hasResult, result: resolveResult } = resolveRef(id, def, options);
+    const { hasResult, result: resolveResult } = resolveRef(id, def, options, parentRefs);
     def = omit(def, '$ref');
     if (hasResult) {
       result = resolveResult;
@@ -101,7 +109,7 @@ function maybeResolveRefs(id: string, def: any, options: Options): any {
   }
 
   const rest = deepMap(def, val =>
-    has(val, '$ref') ? resolveRef(id, val, options).result : val
+    has(val, '$ref') ? resolveRef(id, val, options, parentRefs).result : val
   );
 
   return merge({}, result, rest);
@@ -110,17 +118,18 @@ function maybeResolveRefs(id: string, def: any, options: Options): any {
 function recursiveInstantiate(
   id: string,
   schema: object,
-  options: Options
+  options: Options,
+  parentRefs: string[]
 ): InstantiateResult {
   if (has(schema, 'default')) {
     return {
       hasResult: true,
-      result: maybeResolveRefs(id, schema['default'], options)
+      result: maybeResolveRefs(id, schema['default'], options, parentRefs)
     };
   }
 
   if (has(schema, '$ref')) {
-    return resolveRef(id, schema, options);
+    return resolveRef(id, schema, options, parentRefs);
   }
 
   // if there's `allOf`, `merge` each item in list into new object
@@ -131,10 +140,10 @@ function recursiveInstantiate(
           return res;
         }
 
-        const resolveResult = recursiveInstantiate(id, s, options);
+        const resolveResult = recursiveInstantiate(id, s, options, parentRefs);
 
         if (!resolveResult.hasResult) {
-          return res;
+          return idx === 0 ? resolveResult : res;
         }
 
         if (
@@ -156,7 +165,7 @@ function recursiveInstantiate(
 
   // if there's `oneOf`, resolve with first variant by default
   if (has(schema, 'oneOf')) {
-    return recursiveInstantiate(id, schema['oneOf'][0], options);
+    return recursiveInstantiate(id, schema['oneOf'][0], options, parentRefs);
   }
 
   if (has(schema, 'const')) {
@@ -188,7 +197,8 @@ function recursiveInstantiate(
             } = recursiveInstantiate(
               id,
               schema['properties'][property],
-              options
+              options,
+              parentRefs
             );
             if (hasResult) {
               result[property] = recursiveResult;
@@ -218,7 +228,8 @@ function recursiveInstantiate(
         const defaultItemResult = recursiveInstantiate(
           id,
           schema['items'],
-          options
+          options,
+          parentRefs
         );
         if (defaultItemResult.hasResult) {
           return {
@@ -237,7 +248,7 @@ function recursiveInstantiate(
               return arrayResult;
             }
 
-            const itemResult = recursiveInstantiate(id, s, options);
+            const itemResult = recursiveInstantiate(id, s, options, parentRefs);
 
             if (itemResult.hasResult) {
               return {
@@ -372,7 +383,7 @@ const instantiate = curry((
 
   const { schemaId } = parseRef(schemaRef);
 
-  return recursiveInstantiate(schemaId, validateFunction.schema, options);
+  return recursiveInstantiate(schemaId, validateFunction.schema, options, [schemaRef]);
 });
 
 export default instantiate;
